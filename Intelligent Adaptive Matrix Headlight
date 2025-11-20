@@ -1,0 +1,99 @@
+#include <LedControl.h>
+
+const int DIN_PIN = 11;
+const int CLK_PIN = 13;
+const int CS_PIN  = 10;
+LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, 1);
+
+const int LDR_PINS[5] = {A0, A1, A2, A3, A4};
+const int BTN_MODE = 2;
+const int BTN_BUP  = 3;
+const int BTN_BDN  = 4;
+
+int thresholds[5] = {600, 600, 600, 600, 600}; // turn-off threshold
+int hysteresis = 30; // add hysteresis
+int brightness = 5;
+int mode = 0;
+
+unsigned long lastBtnTime = 0;
+
+// Keep track of mask state to apply hysteresis
+bool mask[8] = {false,false,false,false,false,false,false,false};
+
+const uint8_t sensorToCols[5][2] = {
+  {0,1},
+  {2,3},
+  {4,4},
+  {5,6},
+  {7,7}
+};
+
+void setup() {
+  Serial.begin(115200);
+
+  lc.shutdown(0,false);
+  lc.setIntensity(0, brightness);
+  lc.clearDisplay(0);
+
+  for (int i=0;i<5;i++) pinMode(LDR_PINS[i], INPUT);
+  pinMode(BTN_MODE, INPUT_PULLUP);
+  pinMode(BTN_BUP,  INPUT_PULLUP);
+  pinMode(BTN_BDN,  INPUT_PULLUP);
+
+  for (int r=0;r<8;r++){
+    lc.setRow(0,r,0xFF);
+    delay(40);
+  }
+  lc.clearDisplay(0);
+}
+
+int readLdrSmoothed(int pin) {
+  long s = 0;
+  for (int i=0;i<8;i++){ s += analogRead(pin); delay(2); }
+  return s/8;
+}
+
+void applyMask() {
+  for (int row=0; row<8; row++) {
+    byte rowBits = 0;
+    for (int col=0; col<8; col++) {
+      if (!mask[col]) rowBits |= (1 << col);
+    }
+    lc.setRow(0, row, rowBits);
+  }
+}
+
+void loop() {
+  // buttons
+  if (millis() - lastBtnTime > 1200) {
+    if (digitalRead(BTN_BUP) == LOW) { brightness = min(15, brightness+1); lc.setIntensity(0,brightness); lastBtnTime=millis(); }
+    if (digitalRead(BTN_BDN) == LOW) { brightness = max(0, brightness-1); lc.setIntensity(0,brightness); lastBtnTime=millis(); }
+    if (digitalRead(BTN_MODE) == LOW) { mode = (mode+1)%2; lastBtnTime=millis(); }
+  }
+
+  int ldrVal[5];
+  for (int i=0;i<5;i++) ldrVal[i] = readLdrSmoothed(LDR_PINS[i]);
+
+  // debug
+  Serial.print("LDR: ");
+  for (int i=0;i<5;i++) Serial.print(ldrVal[i]), Serial.print(" ");
+  Serial.print("mode="); Serial.print(mode);
+  Serial.print(" bright="); Serial.println(brightness);
+
+  if (mode == 0) { // AUTO
+    for (int s=0; s<5; s++) {
+      int c1 = sensorToCols[s][0];
+      int c2 = sensorToCols[s][1];
+      for (int c=c1; c<=c2; c++) {
+        // hysteresis: turn off only if above threshold, turn on if below threshold-hysteresis
+        if (ldrVal[s] > thresholds[s]) mask[c] = true;
+        else if (ldrVal[s] < thresholds[s]-hysteresis) mask[c] = false;
+      }
+    }
+  } else {
+    for (int c=0;c<8;c++) mask[c] = false;
+  }
+
+  applyMask();
+  delay(800);
+}
